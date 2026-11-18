@@ -21,6 +21,8 @@ defw_rc_t defw_spawn_listener(pthread_t *id);
 
 void defw_listener_shutdown(void);
 
+void defw_listener_wake(void);
+
 int defw_get_highest_fd(void);
 
 #endif /* DEFW_LISTENER_H */

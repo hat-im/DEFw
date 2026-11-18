@@ -372,7 +372,7 @@ static void close_agent_channel_unlocked(defw_agent_blk_t *agent, int *fd_ptr,
 		*fd_ptr = INVALID_TCP_SOCKET;
 		pthread_mutex_lock(&global_var_mutex);
 		FD_CLR(fd, &g_tAllSet);
-		g_iMaxSelectFd = defw_agent_get_highest_fd();
+		g_iMaxSelectFd = defw_get_highest_fd();
 		pthread_mutex_unlock(&global_var_mutex);
 		closeTcpConnection(fd);
 	}
@@ -1007,6 +1007,7 @@ static void *defw_connect_to_agent_thread(void *user_data)
 	FD_SET(agent->iRpcFd, &g_tAllSet);
 	g_iMaxSelectFd = defw_get_highest_fd();
 	pthread_mutex_unlock(&global_var_mutex);
+	defw_listener_wake();
 
 	defw_agent_report_peer_ready(agent, "outbound-rpc-ready");
 

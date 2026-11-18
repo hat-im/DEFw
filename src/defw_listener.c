@@ -27,6 +27,7 @@
 fd_set g_tAllSet;
 int g_iMaxSelectFd = INVALID_TCP_SOCKET;
 static int g_iListenFd = INVALID_TCP_SOCKET;
+static int g_iWakeFds[2] = {INVALID_TCP_SOCKET, INVALID_TCP_SOCKET};
 static bool g_bShutdown;
 bool dirsvc_connected;
 bool dirsvc_connect_in_progress;
@@ -168,6 +169,7 @@ static void listener_resume_fd(int fd)
 	if (fd > g_iMaxSelectFd)
 		g_iMaxSelectFd = fd;
 	pthread_mutex_unlock(&global_var_mutex);
+	defw_listener_wake();
 }
 
 static bool listener_peer_ready_pending(defw_agent_blk_t *agent)
@@ -205,6 +207,25 @@ static void listener_report_peer_ready(defw_agent_blk_t *agent,
 void defw_listener_shutdown(void)
 {
 	g_bShutdown = true;
+	defw_listener_wake();
+}
+
+void defw_listener_wake(void)
+{
+	char byte = 0;
+
+	if (g_iWakeFds[1] == INVALID_TCP_SOCKET)
+		return;
+	if (write(g_iWakeFds[1], &byte, 1) < 0 && errno != EAGAIN)
+		PERROR("Failed to wake the listener: errno = %d", errno);
+}
+
+static void drain_wake_fd(void)
+{
+	char bytes[64];
+
+	while (read(g_iWakeFds[0], bytes, sizeof(bytes)) > 0)
+		;
 }
 
 int defw_get_highest_fd(void)
@@ -216,6 +237,8 @@ int defw_get_highest_fd(void)
 		iMaxFd = iAgentFd;
 	else
 		iMaxFd = g_iListenFd;
+	if (g_iWakeFds[0] > iMaxFd)
+		iMaxFd = g_iWakeFds[0];
 	PDEBUG("Current highest FD = %d", iMaxFd);
 
 	return iMaxFd;
@@ -760,9 +783,19 @@ static defw_rc_t init_comm(struct sockaddr_in *listen_addr)
 	iFlags = fcntl(g_iListenFd, F_GETFL, 0);
 	fcntl(g_iListenFd, F_SETFL, iFlags | O_NONBLOCK);
 
+	if (pipe(g_iWakeFds) < 0) {
+		closeTcpConnection(g_iListenFd);
+		return EN_DEFW_RC_SOCKET_FAIL;
+	}
+	fcntl(g_iWakeFds[0], F_SETFL,
+	      fcntl(g_iWakeFds[0], F_GETFL, 0) | O_NONBLOCK);
+	fcntl(g_iWakeFds[1], F_SETFL,
+	      fcntl(g_iWakeFds[1], F_GETFL, 0) | O_NONBLOCK);
+
 	/*  Add the listening socket to our select() mask.  */
 	FD_ZERO(&g_tAllSet);
 	FD_SET(g_iListenFd, &g_tAllSet);
+	FD_SET(g_iWakeFds[0], &g_tAllSet);
 
 	return EN_DEFW_RC_OK;
 }
@@ -863,7 +896,7 @@ static void *defw_listener_main(void *usr_data)
 		return NULL;
 	}
 
-	g_iMaxSelectFd = g_iListenFd;
+	g_iMaxSelectFd = defw_get_highest_fd();
 
 	gettimeofday(&time_2, NULL);
 
@@ -871,19 +904,6 @@ static void *defw_listener_main(void *usr_data)
 	 * to shutdown.
 	 */
 	while (!g_bShutdown) {
-		/*  Wait on our select mask for an event to occur.  */
-		select_to.tv_sec = HB_TO;
-		select_to.tv_usec = 0;
-
-		FD_ZERO(&tReadSet);
-		pthread_mutex_lock(&global_var_mutex);
-		tReadSet = g_tAllSet;
-		pthread_mutex_unlock(&global_var_mutex);
-		iNReady = select(g_iMaxSelectFd + 1, &tReadSet, NULL, NULL,
-				 &select_to);
-
-		//PDEBUG("iNReady == %d, g_iMaxSelectFd %d\n", iNReady, g_iMaxSelectFd);
-
 		/* Everyone registers with the dirsvc, even the dirsvc
 		 * registers with itself
 		 */
@@ -904,6 +924,19 @@ static void *defw_listener_main(void *usr_data)
 				pthread_mutex_unlock(&global_var_mutex);
 			}
 		}
+
+		/*  Wait on our select mask for an event to occur.  */
+		select_to.tv_sec = HB_TO;
+		select_to.tv_usec = 0;
+
+		FD_ZERO(&tReadSet);
+		pthread_mutex_lock(&global_var_mutex);
+		tReadSet = g_tAllSet;
+		pthread_mutex_unlock(&global_var_mutex);
+		iNReady = select(g_iMaxSelectFd + 1, &tReadSet, NULL, NULL,
+				 &select_to);
+
+		//PDEBUG("iNReady == %d, g_iMaxSelectFd %d\n", iNReady, g_iMaxSelectFd);
 
 		/*  Determine if we failed the select call */
 		if (iNReady < 0) {
@@ -927,6 +960,11 @@ static void *defw_listener_main(void *usr_data)
 			FD_ZERO(&g_tAllSet);
 
 			continue;
+		}
+
+		if (FD_ISSET(g_iWakeFds[0], &tReadSet)) {
+			drain_wake_fd();
+			iNReady--;
 		}
 
 		if (FD_ISSET(g_iListenFd, &tReadSet)) {
