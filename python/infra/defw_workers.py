@@ -354,6 +354,7 @@ class WorkerThread:
 				return
 			old_dirsvc = getattr(defw, 'dirsvc', None)
 			defw.dirsvc = None
+			defw.dirsvc_ready.clear()
 			dirsvc_binding_runtime_id = None
 			dirsvc_binding_peer_handle = None
 		del old_dirsvc
@@ -394,6 +395,7 @@ class WorkerThread:
 			with dirsvc_binding_lock:
 				old_dirsvc = getattr(defw, 'dirsvc', None)
 				defw.dirsvc = dirsvc
+				defw.dirsvc_ready.set()
 				dirsvc_binding_runtime_id = runtime_id
 				dirsvc_binding_peer_handle = peer_handle
 			del old_dirsvc

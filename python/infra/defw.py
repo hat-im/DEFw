@@ -21,6 +21,7 @@ g_yaml_blocks = []
 defw_config_yaml = None
 me = None
 dirsvc = None
+dirsvc_ready = threading.Event()
 updater_thread = None
 
 def get_nearest_yaml_block():
@@ -1555,20 +1556,10 @@ def connect_to_binding(resolved_binding):
 	return api
 
 def wait_dirsvc(timeout):
-	global dirsvc
-
-	wait = 0
-	if not dirsvc:
-		while wait < timeout:
-			if dirsvc:
-				return True
-			wait += 1
-			logging.defw_core("waiting to connect to directory service")
-			time.sleep(1)
-	else:
+	if dirsvc:
 		return True
-
-	return False
+	logging.defw_core("waiting to connect to directory service")
+	return dirsvc_ready.wait(timeout) and dirsvc is not None
 
 if not cdefw_global.get_defw_initialized():
 	updater_queue = queue.Queue()
@@ -1604,6 +1595,7 @@ if not cdefw_global.get_defw_initialized():
 			service = services['Directory Service']
 		if service:
 			dirsvc = service.service_classes[0]()
+			dirsvc_ready.set()
 
 	# Convenience Variables
 	R = dumpGlobalTestResults

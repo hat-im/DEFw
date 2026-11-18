@@ -73,8 +73,7 @@ CONNECTOR = """
 import time
 import defw
 start = time.time()
-while defw.dirsvc is None and time.time() - start < 10:
-	time.sleep(0.005)
+defw.wait_dirsvc(10)
 print(f'connect seconds {time.time() - start:.3f}', flush=True)
 """
 
